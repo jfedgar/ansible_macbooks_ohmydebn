@@ -1,0 +1,68 @@
+---
+- name: Install Fundamental Binaries
+  become: true
+  apt:
+    name: [curl, git, wget, gpg, brightnessctl, x11-utils]
+    state: present
+    update_cache: yes
+
+- name: Install ohmydebn (The Official Curl Method)
+  shell: |
+    curl -s https://raw.githubusercontent.com/crawfoo/ohmydebn/main/install.sh | bash -s -- --yes
+  args:
+    # This prevents it from re-running if the config directory already exists
+    creates: "{{ ansible_env.HOME }}/.config/ohmydebn"
+
+- name: Core Keyboard Remap (Caps to Escape) - Cinnamon dconf
+  become: false
+  dconf:
+    key: "/org/cinnamon/desktop/input-sources/xkb-options"
+    value: "['caps:escape']"
+
+- name: Core Keyboard Remap (Caps to Escape) - setxkbmap autostart fallback
+  copy:
+    dest: "{{ ansible_env.HOME }}/.config/autostart/caps-to-escape.desktop"
+    content: |
+      [Desktop Entry]
+      Type=Application
+      Exec=setxkbmap -option caps:escape
+      Name=Caps Lock to Escape
+      X-GNOME-Autostart-enabled=true
+
+- name: Maximize Hardware Brightness (Now and Always)
+  block:
+    - name: Set current levels
+      shell: |
+        brightnessctl set 100%
+        brightnessctl --device='apple::kbd_backlight' set 100%
+      ignore_errors: yes
+    - name: Ensure max brightness on login
+      copy:
+        dest: "{{ ansible_env.HOME }}/.config/autostart/max-brightness.desktop"
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Exec=sh -c "brightnessctl set 100% && brightnessctl --device='apple::kbd_backlight' set 100%"
+          Name=Max Brightness
+          X-GNOME-Autostart-enabled=true
+
+- name: Install Brave Browser
+  become: true
+  block:
+    - name: Add Brave Repo & Key
+      shell: |
+        curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" > /etc/apt/sources.list.d/brave-browser-release.list
+    - name: Install Brave
+      apt: { name: brave-browser, update_cache: yes, state: present }
+
+- name: Register and Set System Default Browser
+  become: true
+  shell: |
+    update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/brave-browser 100
+    update-alternatives --set x-www-browser /usr/bin/brave-browser
+
+- name: Set User Default Browser
+  shell: xdg-settings set default-web-browser brave-browser.desktop
+  # Run this as the user, NOT root
+  become: false

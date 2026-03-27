@@ -1,0 +1,14 @@
+---
+- name: Omarchy-like Personalization and Dev Setup
+  hosts: localhost
+  connection: local
+
+  tasks:
+    - name: Core System Foundation
+      include_tasks: tasks/core.yml
+
+    - name: Development Environment Setup
+      include_tasks: tasks/dev_setup.yml
+
+    - name: Desktop Quality of Life (Stable)
+      include_tasks: tasks/quality_of_life.yml

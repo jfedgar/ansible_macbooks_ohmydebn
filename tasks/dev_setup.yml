@@ -1,0 +1,78 @@
+---
+- name: Mise APT Repository Setup
+  become: true
+  block:
+    - name: Add Mise GPG key
+      get_url:
+        url: https://mise.jdx.dev/gpg-key.pub
+        dest: /etc/apt/keyrings/mise-archive-keyring.asc
+        mode: '0644'
+    - name: Add Mise repo
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.asc] https://mise.jdx.dev/deb stable main"
+        state: present
+        filename: mise
+
+- name: Install Mise
+  become: true
+  apt:
+    name: mise
+    state: present
+
+- name: Configure Mise Activation in Shell
+  lineinfile:
+    path: "{{ ansible_env.HOME }}/.zshrc"
+    line: 'eval "$(mise activate zsh)"'
+    state: present
+    create: yes
+
+- name: Install Stable Node via Mise
+  shell: |
+    # Use the system-installed mise directly
+    mise install node@lts --yes
+    mise use -g node@lts
+  args:
+    executable: /bin/zsh
+    creates: "{{ ansible_env.HOME }}/.local/share/mise/installs/node"
+
+- name: Ensure .local/bin directory exists
+  file:
+    path: "{{ ansible_env.HOME }}/.local/bin"
+    state: directory
+    mode: '0755'
+
+- name: Add local bin to ZSH Path
+  lineinfile:
+    path: "{{ ansible_env.HOME }}/.zshrc"
+    line: 'export PATH="$HOME/.local/bin:$PATH"'
+    state: present
+    insertbefore: 'eval "$(mise activate zsh)"'
+
+- name: Install Claude CLI (Corrected Path)
+  shell: curl -fsSL https://claude.ai/install.sh | bash
+  args:
+    creates: "{{ ansible_env.HOME }}/.local/bin/claude"
+
+- name: Install Gemini CLI
+  shell: |
+    eval "$(mise activate zsh)"
+    npm install -g @google/gemini-cli
+  args:
+    executable: /bin/zsh
+    # This matches the path you confirmed from your other machine
+    creates: "{{ ansible_env.HOME }}/.local/share/mise/installs/node/latest/bin/gemini"
+
+- name: Install Latest Python via Mise
+  shell: |
+    mise install python@latest --yes
+    mise use -g python@latest
+  args:
+    executable: /bin/zsh
+    creates: "{{ ansible_env.HOME }}/.local/share/mise/installs/python"
+
+- name: Install Other Dev Tools
+  become: true
+  apt:
+    name: [gh]
+    state: present
+

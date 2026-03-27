@@ -1,0 +1,121 @@
+---
+- name: Install binary dependencies
+  become: true
+  apt:
+    name: [xdotool, wmctrl, libinput-tools, git, x11-utils]
+    state: present
+
+- name: Clone and Install libinput-gestures
+  block:
+    - name: Clone libinput-gestures repo
+      git:
+        repo: 'https://github.com/bulletmark/libinput-gestures.git'
+        dest: /tmp/libinput-gestures
+        depth: 1
+    - name: Install libinput-gestures
+      become: true
+      shell: ./libinput-gestures-setup install
+      args:
+        chdir: /tmp/libinput-gestures
+
+- name: Configure libinput-gestures
+  block:
+    - name: Add user to input group
+      become: true
+      user: { name: "{{ ansible_user_id }}", groups: input, append: yes }
+    - name: Write gesture config
+      copy:
+        dest: "~/.config/libinput-gestures.conf"
+        content: |
+          gesture swipe left 3 xdotool key ctrl+alt+Right
+          gesture swipe right 3 xdotool key ctrl+alt+Left
+
+- name: Workspace Shuffle (Super+Shift+Num)
+  dconf:
+    key: "/org/cinnamon/desktop/keybindings/wm/move-to-workspace-{{ item }}"
+    value: "['<Super><Shift>{{ item }}']"
+  loop: "{{ range(1, 10) | list }}"
+
+- name: UI Essentials (Fullscreen, File Manager, Screenshot, Bounce Keys)
+  dconf:
+    key: "{{ item.key }}"
+    value: "{{ item.value }}"
+  loop:
+    - { key: "/org/cinnamon/desktop/keybindings/wm/toggle-fullscreen", value: "['<Super>f']" }
+    - { key: "/org/cinnamon/desktop/keybindings/media-keys/home", value: "['<Super><Shift>f']" }
+    - { key: "/org/cinnamon/desktop/keybindings/media-keys/area-screenshot", value: "['<Super><Shift>e']" }
+    - { key: "/org/cinnamon/muffin/overlay-key", value: "''" }
+    - { key: "/org/cinnamon/desktop/a11y/keyboard/bouncekeys-enable", value: "true" }
+    - { key: "/org/cinnamon/desktop/a11y/keyboard/bouncekeys-delay", value: "40" }
+    - { key: "/org/cinnamon/desktop/wm/preferences/focus-mode", value: "'sloppy'" }
+
+- name: Update Custom Keybindings
+  dconf:
+    key: "/org/cinnamon/desktop/keybindings/custom-keybindings/{{ item.id }}/{{ item.prop }}"
+    value: "{{ item.val }}"
+  loop:
+    - { id: "custom-0", prop: "name", val: "'Default Browser'" }
+    - { id: "custom-0", prop: "command", val: "'xdg-open https://www.google.com'" }
+    - { id: "custom-0", prop: "binding", val: "['<Super>b']" }
+    - { id: "custom-7", prop: "name", val: "'btop'" }
+    - { id: "custom-7", prop: "command", val: "'alacritty -e btop'" }
+    - { id: "custom-7", prop: "binding", val: "['<Super>i']" }
+    # Super+T -> Browser Tab (Forcing keyup for both Super_L and Super_R)
+    - { id: "custom-41", prop: "name", val: "'Browser New Tab'" }
+    - { id: "custom-41", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.1 && xdotool key ctrl+t\"'" }
+    - { id: "custom-41", prop: "binding", val: "['<Super>t']" }
+    # Super+R -> Browser Reload
+    - { id: "custom-42", prop: "name", val: "'Browser Reload'" }
+    - { id: "custom-42", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.1 && xdotool key ctrl+r\"'" }
+    - { id: "custom-42", prop: "binding", val: "['<Super>r']" }
+
+- name: Strip Super+R from Rofi
+  dconf:
+    key: "/org/cinnamon/desktop/keybindings/custom-keybindings/custom-6/binding"
+    value: "['<Super>space']"
+
+- name: Finalize Custom List
+  dconf:
+    key: "/org/cinnamon/desktop/keybindings/custom-list"
+    value: >-
+      ['custom-0', 'custom-1', 'custom-2', 'custom-3', 'custom-4',
+      'custom-5', 'custom-6', 'custom-7', 'custom-8', 'custom-9',
+      'custom-10', 'custom-11', 'custom-12', 'custom-13', 'custom-14',
+      'custom-15', 'custom-16', 'custom-17', 'custom-18', 'custom-19',
+      'custom-20', 'custom-21', 'custom-22', 'custom-23', 'custom-24',
+      'custom-25', 'custom-26', 'custom-27', 'custom-28', 'custom-29',
+      'custom-30', 'custom-31', 'custom-32', 'custom-33', 'custom-34',
+      'custom-35', 'custom-36', 'custom-37', 'custom-38', 'custom-39',
+      'custom-40', 'custom-41', 'custom-42']
+
+- name: Start Gestures Service
+  shell: |
+    libinput-gestures-setup autostart
+    libinput-gestures-setup start
+  ignore_errors: yes
+
+- name: Smart Universal Clipboard & Selection (Alacritty-Safe)
+  become: false # NEVER run dconf as root
+  dconf:
+    key: "/org/cinnamon/desktop/keybindings/custom-keybindings/{{ item.id }}/{{ item.prop }}"
+    value: "{{ item.val }}"
+  loop:
+    # Super+C: Copy
+    - { id: "custom-1", prop: "name", val: "'Smart Copy'" }
+    - { id: "custom-1", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.05 && CLASS=$(xprop -id $(xdotool getactivewindow) WM_CLASS | awk -F \\\" \\\" {print $4}) && if [ \\\"$CLASS\\\" = \\\"Alacritty\\\" ]; then xdotool key ctrl+shift+c; else xdotool key ctrl+c; fi\"'" }
+    - { id: "custom-1", prop: "binding", val: "['<Super>c']" }
+    
+    # Super+V: Paste
+    - { id: "custom-30", prop: "name", val: "'Smart Paste'" }
+    - { id: "custom-30", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.05 && CLASS=$(xprop -id $(xdotool getactivewindow) WM_CLASS | awk -F \\\" \\\" {print $4}) && if [ \\\"$CLASS\\\" = \\\"Alacritty\\\" ]; then xdotool key ctrl+shift+v; else xdotool key ctrl+v; fi\"'" }
+    - { id: "custom-30", prop: "binding", val: "['<Super>v']" }
+
+    # Super+X: Cut
+    - { id: "custom-2", prop: "name", val: "'Smart Cut'" }
+    - { id: "custom-2", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.05 && CLASS=$(xprop -id $(xdotool getactivewindow) WM_CLASS | awk -F \\\" \\\" {print $4}) && if [ \\\"$CLASS\\\" = \\\"Alacritty\\\" ]; then xdotool key ctrl+shift+x; else xdotool key ctrl+x; fi\"'" }
+    - { id: "custom-2", prop: "binding", val: "['<Super>x']" }
+
+    # Super+A: Select All
+    - { id: "custom-3", prop: "name", val: "'Smart Select All'" }
+    - { id: "custom-3", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.05 && CLASS=$(xprop -id $(xdotool getactivewindow) WM_CLASS | awk -F \\\" \\\" {print $4}) && if [ \\\"$CLASS\\\" = \\\"Alacritty\\\" ]; then true; else xdotool key ctrl+a; fi\"'" }
+    - { id: "custom-3", prop: "binding", val: "['<Super>a']" }
