@@ -12,3 +12,6 @@
 
     - name: Desktop Quality of Life (Stable)
       include_tasks: tasks/quality_of_life.yml
+
+    - name: 2018 MacBook Pro
+      include_tasks: tasks/2018_macbook_pro.yml

@@ -29,6 +29,8 @@
         content: |
           gesture swipe left 3 xdotool key ctrl+alt+Right
           gesture swipe right 3 xdotool key ctrl+alt+Left
+          gesture swipe up 3 xdotool key ctrl+alt+Up
+          gesture swipe down 3 xdotool key ctrl+alt+Down
 
 - name: Workspace Shuffle (Super+Shift+Num)
   dconf:
@@ -60,19 +62,25 @@
     - { id: "custom-7", prop: "name", val: "'btop'" }
     - { id: "custom-7", prop: "command", val: "'alacritty -e btop'" }
     - { id: "custom-7", prop: "binding", val: "['<Super>i']" }
-    # Super+T -> Browser Tab (Forcing keyup for both Super_L and Super_R)
+    # Super+T -> Browser New Tab
     - { id: "custom-41", prop: "name", val: "'Browser New Tab'" }
-    - { id: "custom-41", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.1 && xdotool key ctrl+t\"'" }
+    - { id: "custom-41", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R; sleep 0.1; xdotool key ctrl+t\"'" }
     - { id: "custom-41", prop: "binding", val: "['<Super>t']" }
     # Super+R -> Browser Reload
     - { id: "custom-42", prop: "name", val: "'Browser Reload'" }
-    - { id: "custom-42", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.1 && xdotool key ctrl+r\"'" }
+    - { id: "custom-42", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R; sleep 0.1; xdotool key ctrl+r\"'" }
     - { id: "custom-42", prop: "binding", val: "['<Super>r']" }
 
 - name: Strip Super+R from Rofi
   dconf:
     key: "/org/cinnamon/desktop/keybindings/custom-keybindings/custom-6/binding"
     value: "['<Super>space']"
+
+- name: Disable Specific Conflicting ohmydebn Shortcuts
+  dconf:
+    key: "/org/cinnamon/desktop/keybindings/custom-keybindings/custom-{{ item }}/binding"
+    value: "['']"
+  loop: []  # custom-8 (Super+X) and custom-18 (Super+A) are repurposed for clipboard below
 
 - name: Finalize Custom List
   dconf:
@@ -100,22 +108,22 @@
     key: "/org/cinnamon/desktop/keybindings/custom-keybindings/{{ item.id }}/{{ item.prop }}"
     value: "{{ item.val }}"
   loop:
-    # Super+C: Copy
+    # Super+C: Copy — custom-1 (was Calendar/Super+C, same key so repurposed cleanly)
     - { id: "custom-1", prop: "name", val: "'Smart Copy'" }
-    - { id: "custom-1", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.05 && CLASS=$(xprop -id $(xdotool getactivewindow) WM_CLASS | awk -F \\\" \\\" {print $4}) && if [ \\\"$CLASS\\\" = \\\"Alacritty\\\" ]; then xdotool key ctrl+shift+c; else xdotool key ctrl+c; fi\"'" }
+    - { id: "custom-1", prop: "command", val: "'sh -c \"WIN=$(xdotool getactivewindow); xdotool keyup Super_L Super_R; sleep 0.1; if xprop -id $WIN WM_CLASS | grep -qi alacritty; then xdotool key ctrl+shift+c; else xdotool key ctrl+c; fi\"'" }
     - { id: "custom-1", prop: "binding", val: "['<Super>c']" }
-    
-    # Super+V: Paste
+
+    # Super+V: Paste — custom-30 (was VirtMan/Super+V, same key so repurposed cleanly)
     - { id: "custom-30", prop: "name", val: "'Smart Paste'" }
-    - { id: "custom-30", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.05 && CLASS=$(xprop -id $(xdotool getactivewindow) WM_CLASS | awk -F \\\" \\\" {print $4}) && if [ \\\"$CLASS\\\" = \\\"Alacritty\\\" ]; then xdotool key ctrl+shift+v; else xdotool key ctrl+v; fi\"'" }
+    - { id: "custom-30", prop: "command", val: "'sh -c \"WIN=$(xdotool getactivewindow); xdotool keyup Super_L Super_R; sleep 0.1; if xprop -id $WIN WM_CLASS | grep -qi alacritty; then xdotool key ctrl+shift+v; else xdotool key ctrl+v; fi\"'" }
     - { id: "custom-30", prop: "binding", val: "['<Super>v']" }
 
-    # Super+X: Cut
-    - { id: "custom-2", prop: "name", val: "'Smart Cut'" }
-    - { id: "custom-2", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.05 && CLASS=$(xprop -id $(xdotool getactivewindow) WM_CLASS | awk -F \\\" \\\" {print $4}) && if [ \\\"$CLASS\\\" = \\\"Alacritty\\\" ]; then xdotool key ctrl+shift+x; else xdotool key ctrl+x; fi\"'" }
-    - { id: "custom-2", prop: "binding", val: "['<Super>x']" }
+    # Super+X: Cut — custom-8 (was X.com/Super+X, same key so repurposed cleanly)
+    - { id: "custom-8", prop: "name", val: "'Smart Cut'" }
+    - { id: "custom-8", prop: "command", val: "'sh -c \"WIN=$(xdotool getactivewindow); xdotool keyup Super_L Super_R; sleep 0.1; if xprop -id $WIN WM_CLASS | grep -qi alacritty; then xdotool key ctrl+shift+x; else xdotool key ctrl+x; fi\"'" }
+    - { id: "custom-8", prop: "binding", val: "['<Super>x']" }
 
-    # Super+A: Select All
-    - { id: "custom-3", prop: "name", val: "'Smart Select All'" }
-    - { id: "custom-3", prop: "command", val: "'sh -c \"xdotool keyup Super_L Super_R && sleep 0.05 && CLASS=$(xprop -id $(xdotool getactivewindow) WM_CLASS | awk -F \\\" \\\" {print $4}) && if [ \\\"$CLASS\\\" = \\\"Alacritty\\\" ]; then true; else xdotool key ctrl+a; fi\"'" }
-    - { id: "custom-3", prop: "binding", val: "['<Super>a']" }
+    # Super+A: Select All — custom-18 (was OpenCode/Super+A, same key so repurposed cleanly)
+    - { id: "custom-18", prop: "name", val: "'Smart Select All'" }
+    - { id: "custom-18", prop: "command", val: "'sh -c \"WIN=$(xdotool getactivewindow); xdotool keyup Super_L Super_R; sleep 0.1; if xprop -id $WIN WM_CLASS | grep -qi alacritty; then true; else xdotool key ctrl+a; fi\"'" }
+    - { id: "custom-18", prop: "binding", val: "['<Super>a']" }

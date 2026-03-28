@@ -1,0 +1,5 @@
+---
+- name: Confirm 2018 MacBook Pro
+  debug:
+    msg: "Running on a 2018 MacBook Pro (MacBookPro15,1)"
+  when: ansible_product_name == "MacBookPro15,1"
