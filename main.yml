@@ -2,16 +2,16 @@
 - name: Omarchy-like Personalization and Dev Setup
   hosts: localhost
   connection: local
-
+  handlers:
+    - import_tasks: handlers/main.yml
   tasks:
     - name: Core System Foundation
       include_tasks: tasks/core.yml
-
     - name: Development Environment Setup
       include_tasks: tasks/dev_setup.yml
-
     - name: Desktop Quality of Life (Stable)
       include_tasks: tasks/quality_of_life.yml
-
     - name: 2018 MacBook Pro
       include_tasks: tasks/2018_macbook_pro.yml
+      when: ansible_product_name == "MacBookPro15,1"
+

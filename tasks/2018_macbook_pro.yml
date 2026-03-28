@@ -1,5 +1,224 @@
 ---
+# =============================================================================
+# 2018 MacBook Pro (MacBookPro15,1) — Touch Bar & T2 Fixes (for debian13)
+# =============================================================================
+#
+# Problem: The apple-bce driver's bce-vhci layer has a race condition during
+# initial boot that causes appletbdrm to timeout (-110) when probing the
+# Touch Bar. The fix reloads apple-bce after boot to give appletbdrm a fresh
+# connection. PipeWire must be stopped first to release the audio reference.
+#
+# The apple-bce reload also re-enumerates the trackpad, breaking
+# libinput-gestures which must be restarted in the user's session context.
+#
+# The T2 internal ethernet (cdc_ncm) causes spurious NetworkManager
+# connection failure notifications and should be ignored.
+#
+# Gate: Only runs on MacBookPro15,1
+# =============================================================================
+
 - name: Confirm 2018 MacBook Pro
   debug:
-    msg: "Running on a 2018 MacBook Pro (MacBookPro15,1)"
-  when: ansible_product_name == "MacBookPro15,1"
+    msg: "Running 2018 MacBook Pro tasks ({{ ansible_product_name }})"
+
+# ---------------------------------------------------------------------------
+# Touch Bar — module configuration
+# ---------------------------------------------------------------------------
+
+- name: Configure Touch Bar module loading
+  become: true
+  copy:
+    dest: /etc/modules-load.d/apple-tb.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      apple-ibridge
+      appletbdrm
+      uinput
+
+- name: Blacklist legacy apple_touchbar driver
+  become: true
+  copy:
+    dest: /etc/modprobe.d/blacklist-touchbar.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      blacklist apple_touchbar
+
+- name: Ensure no stale touchbar modprobe configs exist
+  become: true
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/modprobe.d/touchbar-mode.conf
+    - /etc/modprobe.d/blacklist-appletb-inkern.conf
+
+# ---------------------------------------------------------------------------
+# Touch Bar — reload script
+# ---------------------------------------------------------------------------
+
+- name: Install touchbar-fix script
+  become: true
+  copy:
+    dest: /usr/local/bin/touchbar-fix.sh
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      exec > /home/{{ ansible_user_id }}/touchbar-fix.log 2>&1
+      set -x
+      date
+
+      # Wait for system to settle
+      sleep 7
+
+      # Save keyboard backlight
+      KBD_BL=$(cat /sys/class/leds/apple::kbd_backlight/brightness 2>/dev/null)
+
+      # Stop tiny-dfr
+      systemctl stop tiny-dfr 2>/dev/null
+
+      # Stop audio services (releases apple-bce reference)
+      runuser -u {{ ansible_user_id }} -- env XDG_RUNTIME_DIR=/run/user/{{ ansible_user_uid }} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ ansible_user_uid }}/bus \
+        systemctl --user stop pipewire-pulse.socket pipewire.socket 2>/dev/null
+      runuser -u {{ ansible_user_id }} -- env XDG_RUNTIME_DIR=/run/user/{{ ansible_user_uid }} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ ansible_user_uid }}/bus \
+        systemctl --user stop wireplumber.service pipewire-pulse.service pipewire.service 2>/dev/null
+      fuser -k /dev/snd/* 2>/dev/null
+      sleep 2
+
+      # Unload touchbar drivers
+      modprobe -r appletbdrm 2>/dev/null
+      modprobe -r hid_appletb_kbd 2>/dev/null
+      modprobe -r hid_appletb_bl 2>/dev/null
+
+      # Unload apple-bce
+      modprobe -r apple-bce
+      echo "apple-bce rc=$?"
+
+      # Reload
+      sleep 2
+      modprobe apple-bce
+      sleep 5
+      modprobe appletbdrm
+      sleep 2
+
+      # Check
+      dmesg | grep appletbdrm | tail -5
+
+      # Start tiny-dfr
+      systemctl start tiny-dfr 2>/dev/null
+
+      # Restore keyboard backlight
+      if [ -n "$KBD_BL" ] && [ "$KBD_BL" -gt 0 ] 2>/dev/null; then
+        echo "$KBD_BL" > /sys/class/leds/apple::kbd_backlight/brightness 2>/dev/null
+      else
+        echo 128 > /sys/class/leds/apple::kbd_backlight/brightness 2>/dev/null
+      fi
+
+      # Restart audio
+      runuser -u {{ ansible_user_id }} -- env XDG_RUNTIME_DIR=/run/user/{{ ansible_user_uid }} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ ansible_user_uid }}/bus \
+        systemctl --user start pipewire.socket pipewire-pulse.socket 2>/dev/null
+      runuser -u {{ ansible_user_id }} -- env XDG_RUNTIME_DIR=/run/user/{{ ansible_user_uid }} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ ansible_user_uid }}/bus \
+        systemctl --user start wireplumber pipewire pipewire-pulse 2>/dev/null
+
+      echo "=== Done ==="
+      date
+
+# ---------------------------------------------------------------------------
+# Touch Bar — systemd service
+# ---------------------------------------------------------------------------
+
+- name: Install touchbar-fix systemd service
+  become: true
+  copy:
+    dest: /etc/systemd/system/touchbar-fix.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Reload apple-bce to fix Touch Bar
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/touchbar-fix.sh
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: reload systemd daemon
+
+- name: Enable touchbar-fix service
+  become: true
+  systemd:
+    name: touchbar-fix.service
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Gesture fix after touchbar reload
+# ---------------------------------------------------------------------------
+
+- name: Ensure user local bin directory exists
+  file:
+    path: "{{ ansible_env.HOME }}/.local/bin"
+    state: directory
+    mode: "0755"
+
+- name: Ensure user autostart directory exists
+  file:
+    path: "{{ ansible_env.HOME }}/.config/autostart"
+    state: directory
+    mode: "0755"
+
+- name: Install gesture fixup script
+  copy:
+    dest: "{{ ansible_env.HOME }}/.local/bin/gesture-fixup.sh"
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      # Wait for touchbar-fix to finish re-enumerating the trackpad
+      sleep 8
+      libinput-gestures-setup restart
+
+- name: Install gesture fixup autostart entry
+  copy:
+    dest: "{{ ansible_env.HOME }}/.config/autostart/gesture-fixup.desktop"
+    mode: "0644"
+    content: |
+      [Desktop Entry]
+      Type=Application
+      Name=Gesture Fixup
+      Exec={{ ansible_env.HOME }}/.local/bin/gesture-fixup.sh
+      Hidden=false
+      X-GNOME-Autostart-enabled=true
+      Comment=Restart gestures after touchbar fix re-enumerates trackpad
+
+# ---------------------------------------------------------------------------
+# T2 internal ethernet — suppress spurious NetworkManager notifications
+# ---------------------------------------------------------------------------
+
+- name: Add udev rule to rename T2 internal ethernet
+  become: true
+  copy:
+    dest: /etc/udev/rules.d/99-network-t2-ncm.rules
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="ac:de:48:00:11:22", NAME="t2_ncm"
+  notify: reload udev rules
+
+- name: Tell NetworkManager to ignore T2 internal ethernet
+  become: true
+  copy:
+    dest: /etc/NetworkManager/conf.d/99-network-t2-ncm.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [main]
+      no-auto-default=t2_ncm
+  notify: restart networkmanager

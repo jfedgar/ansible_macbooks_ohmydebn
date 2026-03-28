@@ -94,7 +94,7 @@
       'custom-25', 'custom-26', 'custom-27', 'custom-28', 'custom-29',
       'custom-30', 'custom-31', 'custom-32', 'custom-33', 'custom-34',
       'custom-35', 'custom-36', 'custom-37', 'custom-38', 'custom-39',
-      'custom-40', 'custom-41', 'custom-42']
+      'custom-40', 'custom-41', 'custom-42', 'custom-43']
 
 - name: Start Gestures Service
   shell: |
@@ -127,3 +127,8 @@
     - { id: "custom-18", prop: "name", val: "'Smart Select All'" }
     - { id: "custom-18", prop: "command", val: "'sh -c \"WIN=$(xdotool getactivewindow); xdotool keyup Super_L Super_R; sleep 0.1; if xprop -id $WIN WM_CLASS | grep -qi alacritty; then true; else xdotool key ctrl+a; fi\"'" }
     - { id: "custom-18", prop: "binding", val: "['<Super>a']" }
+
+    # Super+Z: Undo — custom-43 (no-op in alacritty to avoid SIGTSTP/suspend)
+    - { id: "custom-43", prop: "name", val: "'Smart Undo'" }
+    - { id: "custom-43", prop: "command", val: "'sh -c \"WIN=$(xdotool getactivewindow); xdotool keyup Super_L Super_R; sleep 0.1; if xprop -id $WIN WM_CLASS | grep -qi alacritty; then true; else xdotool key ctrl+z; fi\"'" }
+    - { id: "custom-43", prop: "binding", val: "['<Super>z']" }
