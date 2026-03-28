@@ -29,22 +29,70 @@
       Name=Caps Lock to Escape
       X-GNOME-Autostart-enabled=true
 
-- name: Maximize Hardware Brightness (Now and Always)
+- name: Persist and Restore Brightness Across Reboots
   block:
-    - name: Set current levels
-      shell: |
-        brightnessctl set 100%
-        brightnessctl --device='apple::kbd_backlight' set 100%
-      ignore_errors: yes
-    - name: Ensure max brightness on login
+    - name: Ensure ~/.local/bin and brightness state dirs exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ ansible_env.HOME }}/.local/bin"
+        - "{{ ansible_env.HOME }}/.config/brightness-state"
+        - "{{ ansible_env.HOME }}/.config/systemd/user"
+
+    - name: Remove old max-brightness autostart
+      file:
+        path: "{{ ansible_env.HOME }}/.config/autostart/max-brightness.desktop"
+        state: absent
+
+    - name: Create restore-brightness script
       copy:
-        dest: "{{ ansible_env.HOME }}/.config/autostart/max-brightness.desktop"
+        dest: "{{ ansible_env.HOME }}/.local/bin/restore-brightness"
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          sleep 2
+          if [ -f "$HOME/.config/brightness-state/monitor" ]; then
+              brightnessctl set "$(cat "$HOME/.config/brightness-state/monitor")" 2>/dev/null || true
+          fi
+          if [ -f "$HOME/.config/brightness-state/kbd" ]; then
+              brightnessctl --device='apple::kbd_backlight' set "$(cat "$HOME/.config/brightness-state/kbd")" 2>/dev/null || true
+          fi
+
+    - name: Restore brightness on login (autostart)
+      copy:
+        dest: "{{ ansible_env.HOME }}/.config/autostart/restore-brightness.desktop"
         content: |
           [Desktop Entry]
           Type=Application
-          Exec=sh -c "brightnessctl set 100% && brightnessctl --device='apple::kbd_backlight' set 100%"
-          Name=Max Brightness
+          Exec={{ ansible_env.HOME }}/.local/bin/restore-brightness
+          Name=Restore Brightness
           X-GNOME-Autostart-enabled=true
+
+    - name: Save brightness on logout (systemd user service)
+      copy:
+        dest: "{{ ansible_env.HOME }}/.config/systemd/user/save-brightness.service"
+        content: |
+          [Unit]
+          Description=Save brightness on logout
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStop=sh -c 'brightnessctl get > %h/.config/brightness-state/monitor && brightnessctl --device=apple::kbd_backlight get > %h/.config/brightness-state/kbd'
+
+          [Install]
+          WantedBy=default.target
+
+    - name: Enable and start save-brightness service
+      systemd:
+        name: save-brightness
+        scope: user
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      ignore_errors: yes
 
 - name: Install Brave Browser
   become: true
