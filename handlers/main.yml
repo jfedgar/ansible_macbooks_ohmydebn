@@ -14,3 +14,17 @@
   systemd:
     name: NetworkManager.service
     state: restarted
+
+- name: restart lightdm
+  become: true
+  systemd:
+    name: lightdm
+    state: restarted
+
+- name: update grub
+  become: true
+  command: update-grub
+
+- name: rebuild console font
+  become: true
+  command: dpkg-reconfigure -f noninteractive console-setup

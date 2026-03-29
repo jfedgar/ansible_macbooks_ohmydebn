@@ -11,6 +11,8 @@
       include_tasks: tasks/dev_setup.yml
     - name: Desktop Quality of Life (Stable)
       include_tasks: tasks/quality_of_life.yml
+    - name: Panel Appearance
+      include_tasks: tasks/appearance.yml
     - name: 2018 MacBook Pro
       include_tasks: tasks/2018_macbook_pro.yml
       when: ansible_product_name == "MacBookPro15,1"

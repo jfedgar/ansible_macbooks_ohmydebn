@@ -175,7 +175,7 @@
 
 - name: Install gesture fixup script
   copy:
-    dest: "{{ ansible_env.HOME }}/.local/bin/gesture-fixup.sh"
+    dest: "{{ ansible_env.HOME }}/.local/bin/gestures-boot.sh"
     mode: "0755"
     content: |
       #!/bin/bash
@@ -185,13 +185,13 @@
 
 - name: Install gesture fixup autostart entry
   copy:
-    dest: "{{ ansible_env.HOME }}/.config/autostart/gesture-fixup.desktop"
+    dest: "{{ ansible_env.HOME }}/.config/autostart/gestures-boot.desktop"
     mode: "0644"
     content: |
       [Desktop Entry]
       Type=Application
-      Name=Gesture Fixup
-      Exec={{ ansible_env.HOME }}/.local/bin/gesture-fixup.sh
+      Name=Gestures Boot
+      Exec={{ ansible_env.HOME }}/.local/bin/gestures-boot.sh
       Hidden=false
       X-GNOME-Autostart-enabled=true
       Comment=Restart gestures after touchbar fix re-enumerates trackpad
@@ -222,3 +222,264 @@
       [main]
       no-auto-default=t2_ncm
   notify: restart networkmanager
+
+# ---------------------------------------------------------------------------
+# Fix suspend/resume issue for t2linux/debian13 combo - "Full gmux" — route display to Intel iGPU
+# ---------------------------------------------------------------------------
+
+- name: Configure apple-gmux to use Intel iGPU
+  become: true
+  copy:
+    dest: /etc/modprobe.d/apple-gmux.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Enable the iGPU by default if present
+      # Routes internal display through Intel via hardware multiplexer
+      options apple-gmux force_igd=y
+
+- name: Configure Xorg for Intel-only rendering
+  become: true
+  copy:
+    dest: /etc/X11/xorg.conf.d/20-intel-only.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # AutoAddGPU false prevents Xorg from auto-probing AMD GPU
+      # Without this, modesetting opens AMD as modeset(G0), keeping refcount at 1
+      Section "ServerFlags"
+          Option  "AutoAddGPU"  "false"
+      EndSection
+
+      Section "ServerLayout"
+          Identifier  "IntelOnly"
+          Screen 0    "IntelScreen"
+      EndSection
+
+      Section "Screen"
+          Identifier  "IntelScreen"
+          Device      "Intel"
+      EndSection
+
+      Section "Device"
+          Identifier  "Intel"
+          Driver      "modesetting"
+          BusID       "PCI:0:2:0"
+      EndSection
+
+- name: Ensure Xorg config directory exists
+  become: true
+  file:
+    path: /etc/X11/xorg.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Ensure no stale GPU/suspend modprobe configs exist
+  become: true
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/modprobe.d/blacklist-amdgpu.conf
+    - /etc/udev/rules.d/30-amdgpu-pm.rules
+    - /etc/X11/xorg.conf.d/20-intel-primary.conf
+
+# ---------------------------------------------------------------------------
+# Kernel parameters — pcie_ports=compat is critical for wifi resume after suspend
+# ---------------------------------------------------------------------------
+
+- name: Set kernel parameters for T2 suspend support
+  become: true
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX='
+    line: 'GRUB_CMDLINE_LINUX="intel_iommu=on iommu=pt pcie_ports=compat pm_async=off pcie_aspm=off amdgpu.aspm=0 i915.enable_psr=0 amdgpu.runpm=-2"'
+  notify: update grub
+
+# ---------------------------------------------------------------------------
+# Suspend/Resume — module teardown and rebuild around S3 (systemctl will call this script on pre/post resume)
+# ---------------------------------------------------------------------------
+
+- name: Install suspend-fix script
+  become: true
+  copy:
+    dest: /usr/local/bin/suspend-fix.sh
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      # Suspend/Resume Fix — MacBookPro15,1 (2018) Debian 13 Trixie
+      # Requires: full gmux (apple-gmux force_igd=y + Xorg ServerLayout Intel-only)
+      exec >> /home/{{ ansible_user_id }}/touchbar_repair/log/suspend-fix.log 2>&1
+      set -x
+      date
+      echo "=== $1 ==="
+
+      case "$1" in
+        pre)
+          # Disable spurious wake sources
+          for dev in XHC2 XHC3 PEG0 PEG1 PEG2 RP01 RP17 ARPT; do
+            if grep -q "${dev}.*enabled" /proc/acpi/wakeup; then
+              echo "$dev" > /proc/acpi/wakeup
+            fi
+          done
+
+          # Save keyboard backlight
+          cat /sys/class/leds/apple::kbd_backlight/brightness > /tmp/kbd_bl_save 2>/dev/null
+
+          # Stop audio (releases apple-bce reference via snd_pcm)
+          runuser -u {{ ansible_user_id }} -- env XDG_RUNTIME_DIR=/run/user/{{ ansible_user_uid }} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ ansible_user_uid }}/bus \
+            systemctl --user stop pipewire-pulse.socket pipewire.socket 2>/dev/null
+          runuser -u {{ ansible_user_id }} -- env XDG_RUNTIME_DIR=/run/user/{{ ansible_user_uid }} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ ansible_user_uid }}/bus \
+            systemctl --user stop wireplumber.service pipewire-pulse.service pipewire.service 2>/dev/null
+          fuser -k /dev/snd/* 2>/dev/null
+          sleep 1
+
+          # Stop tiny-dfr + unload touchbar
+          systemctl stop tiny-dfr 2>/dev/null
+          modprobe -r appletbdrm 2>/dev/null
+          modprobe -r hid_appletb_kbd 2>/dev/null
+          modprobe -r hid_appletb_bl 2>/dev/null
+
+          # Force-unload amdgpu (safe — Intel drives display via full gmux)
+          rmmod -f amdgpu 2>/dev/null
+          echo "amdgpu force-unload rc=$?"
+          sleep 1
+
+          # Unload wifi
+          echo 1 > /sys/bus/pci/devices/0000:03:00.0/remove 2>/dev/null
+          modprobe -r brcmfmac_wcc 2>/dev/null
+          modprobe -r brcmfmac 2>/dev/null
+
+          # Unload apple-bce
+          modprobe -r apple-bce 2>/dev/null
+          echo "apple-bce unload rc=$?"
+          ;;
+
+        post)
+          # Reload apple-bce
+          modprobe apple-bce
+          sleep 2
+
+          # Reload wifi
+          echo 1 > /sys/bus/pci/rescan
+          modprobe brcmfmac
+          modprobe brcmfmac_wcc 2>/dev/null
+          sleep 2
+
+          # Reload amdgpu (fresh state)
+          modprobe amdgpu
+          sleep 2
+
+          # Reload touchbar
+          modprobe hid_appletb_bl
+          modprobe hid_appletb_kbd
+          modprobe appletbdrm
+          sleep 2
+          systemctl start tiny-dfr 2>/dev/null
+
+          # Restore keyboard backlight
+          if [ -f /tmp/kbd_bl_save ]; then
+            KBD_VAL=$(cat /tmp/kbd_bl_save)
+            if [ -n "$KBD_VAL" ] && [ "$KBD_VAL" -gt 0 ] 2>/dev/null; then
+              echo "$KBD_VAL" > /sys/class/leds/apple::kbd_backlight/brightness 2>/dev/null
+            else
+              echo 128 > /sys/class/leds/apple::kbd_backlight/brightness 2>/dev/null
+            fi
+          else
+            echo 128 > /sys/class/leds/apple::kbd_backlight/brightness 2>/dev/null
+          fi
+
+          # Restart audio
+          runuser -u {{ ansible_user_id }} -- env XDG_RUNTIME_DIR=/run/user/{{ ansible_user_uid }} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ ansible_user_uid }}/bus \
+            systemctl --user start pipewire.socket pipewire-pulse.socket 2>/dev/null
+          runuser -u {{ ansible_user_id }} -- env XDG_RUNTIME_DIR=/run/user/{{ ansible_user_uid }} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ ansible_user_uid }}/bus \
+            systemctl --user start wireplumber pipewire pipewire-pulse 2>/dev/null
+      esac
+
+      echo "=== $1 done ==="
+      date
+
+- name: Install suspend-fix systemd service
+  become: true
+  copy:
+    dest: /etc/systemd/system/suspend-fix.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=T2 Mac Suspend/Resume Fix
+      Before=sleep.target suspend.target
+      StopWhenUnneeded=yes
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/bin/suspend-fix.sh pre
+      ExecStop=/usr/local/bin/suspend-fix.sh post
+
+      [Install]
+      WantedBy=sleep.target suspend.target
+  notify: reload systemd daemon
+
+- name: Enable suspend-fix service
+  become: true
+  systemd:
+    name: suspend-fix.service
+    enabled: true
+
+- name: Ensure suspend-fix log directory exists
+  file:
+    path: "{{ ansible_env.HOME }}/touchbar_repair/log"
+    state: directory
+    mode: "0755"
+
+# ---------------------------------------------------------------------------
+    # Gestures resume — D-Bus watcher (runs in user session, not root, note: runuser DOES NOT worK for this. Must be a watcher for some reason)
+# ---------------------------------------------------------------------------
+
+- name: Install gestures resume watcher script
+  copy:
+    dest: "{{ ansible_env.HOME }}/.local/bin/gestures-resume.sh"
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      gdbus monitor --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1 |
+      while read -r line; do
+        if echo "$line" | grep -q "PrepareForSleep (false"; then
+          sleep 4
+          libinput-gestures-setup restart
+        fi
+      done
+
+- name: Install gestures resume autostart entry
+  copy:
+    dest: "{{ ansible_env.HOME }}/.config/autostart/gestures-resume.desktop"
+    mode: "0644"
+    content: |
+      [Desktop Entry]
+      Type=Application
+      Name=Gestures Resume
+      Exec={{ ansible_env.HOME }}/.local/bin/gestures-resume.sh
+      Hidden=false
+      X-GNOME-Autostart-enabled=true
+      Comment=Restart gestures after suspend resume via D-Bus watcher
+
+# ---------------------------------------------------------------------------
+# Clean up stale gesture files (renamed from gesture-fixup to gestures-boot)
+# ---------------------------------------------------------------------------
+
+- name: Remove old gesture-fixup files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ ansible_env.HOME }}/.local/bin/gesture-fixup.sh"
+    - "{{ ansible_env.HOME }}/.config/autostart/gesture-fixup.desktop"
+    - "{{ ansible_env.HOME }}/.local/bin/gestures-resume-watcher.sh"
+    - "{{ ansible_env.HOME }}/.config/autostart/gestures-resume-watcher.desktop"
+

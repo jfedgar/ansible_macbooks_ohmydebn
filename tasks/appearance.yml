@@ -1,0 +1,38 @@
+---
+# ---------------------------------------------------------------------------
+# Panel Appearance — thin panel + glider icon (like Omarchy)
+# ---------------------------------------------------------------------------
+
+- name: Ensure custom icon directory exists
+  file:
+    path: "{{ ansible_env.HOME }}/.local/share/icons/custom"
+    state: directory
+    mode: '0755'
+
+- name: Install glider SVG as menu icon
+  copy:
+    src: "{{ playbook_dir }}/files/glider.svg"
+    dest: "{{ ansible_env.HOME }}/.local/share/icons/custom/glider.svg"
+    mode: '0644'
+
+- name: Set thin panel height (25px)
+  dconf:
+    key: "/org/cinnamon/panels-height"
+    value: "['1:25']"
+
+- name: Set panel icon sizes for thin panel
+  dconf:
+    key: "/org/cinnamon/panel-zone-icon-sizes"
+    value: "'[{\"panelId\": 1, \"left\": 18, \"center\": 0, \"right\": 18}]'"
+
+- name: Patch menu applet config for glider icon
+  shell: |
+    CFG="{{ ansible_env.HOME }}/.config/cinnamon/spices/menu@cinnamon.org/0.json"
+    jq '
+      ."menu-custom".value = true |
+      ."menu-icon".value = "{{ ansible_env.HOME }}/.local/share/icons/custom/glider.svg" |
+      ."menu-icon-size".value = 18 |
+      ."menu-label".value = ""
+    ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+  args:
+    executable: /bin/bash

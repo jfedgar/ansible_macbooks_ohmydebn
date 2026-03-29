@@ -4,8 +4,14 @@
   apt:
     name: [xdotool, wmctrl, libinput-tools, git, x11-utils]
     state: present
+    
+- name: Check if libinput-gestures is installed
+  stat:
+    path: /usr/bin/libinput-gestures
+  register: libinput_gestures_check
 
 - name: Clone and Install libinput-gestures
+  when: not libinput_gestures_check.stat.exists
   block:
     - name: Clone libinput-gestures repo
       git:
@@ -132,3 +138,67 @@
     - { id: "custom-43", prop: "name", val: "'Smart Undo'" }
     - { id: "custom-43", prop: "command", val: "'sh -c \"WIN=$(xdotool getactivewindow); xdotool keyup Super_L Super_R; sleep 0.1; if xprop -id $WIN WM_CLASS | grep -qi alacritty; then true; else xdotool key ctrl+z; fi\"'" }
     - { id: "custom-43", prop: "binding", val: "['<Super>z']" }
+
+# ---------------------------------------------------------------------------
+# HiDPI Console Font (Retina MacBooks — unreadable without this)
+# ---------------------------------------------------------------------------
+
+- name: Configure large console font for HiDPI displays
+  become: true
+  lineinfile:
+    path: /etc/default/console-setup
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^FONTFACE=', line: 'FONTFACE="Terminus"' }
+    - { regexp: '^FONTSIZE=', line: 'FONTSIZE="16x32"' }
+  when: ansible_product_name is match("MacBookPro.*")
+  notify: rebuild console font
+
+- name: Set GRUB framebuffer resolution for HiDPI
+  become: true
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^#?GRUB_GFXMODE='
+    line: 'GRUB_GFXMODE=1024x768'
+  when: ansible_product_name is match("MacBookPro.*")
+  notify: update grub
+
+# ---------------------------------------------------------------------------
+# Autologin (LightDM + Cinnamon)
+# ---------------------------------------------------------------------------
+
+- name: Ensure autologin group exists
+  become: true
+  group:
+    name: autologin
+    system: true
+    state: present
+
+- name: Add user to autologin group
+  become: true
+  user:
+    name: "{{ ansible_user_id }}"
+    groups: autologin
+    append: true
+
+- name: Configure LightDM autologin
+  become: true
+  blockinfile:
+    path: /etc/lightdm/lightdm.conf
+    marker: "# {mark} ANSIBLE MANAGED - autologin"
+    block: |
+      autologin-user={{ ansible_user_id }}
+      autologin-user-timeout=0
+      autologin-session=cinnamon
+    insertafter: '^\[Seat:\*\]'
+    create: false
+  notify: restart lightdm
+
+- name: Ensure lightdm-autologin PAM allows autologin group
+  become: true
+  lineinfile:
+    path: /etc/pam.d/lightdm-autologin
+    regexp: '^auth\s+required\s+pam_succeed_if.so'
+    line: 'auth    required    pam_succeed_if.so user ingroup autologin'
+    state: present
