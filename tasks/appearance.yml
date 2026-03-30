@@ -36,3 +36,14 @@
     ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
   args:
     executable: /bin/bash
+
+# ---------------------------------------------------------------------------
+# Terminal Prompt — Starship icon
+# ---------------------------------------------------------------------------
+
+- name: Set Starship Debian icon to Data Matrix (f153c)
+  lineinfile:
+    path: "{{ ansible_env.HOME }}/.config/starship.toml"
+    regexp: '^Debian = '
+    line: 'Debian = "󱔼"'
+    state: present
