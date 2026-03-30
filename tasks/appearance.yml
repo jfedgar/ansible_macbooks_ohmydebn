@@ -47,3 +47,158 @@
     regexp: '^Debian = '
     line: 'Debian = "󱔼"'
     state: present
+
+# ---------------------------------------------------------------------------
+# Minimal Lockscreen (Omarchy Style)
+# ---------------------------------------------------------------------------
+
+- name: Simplify Cinnamon screensaver UI
+  dconf:
+    key: "/org/cinnamon/desktop/screensaver/{{ item.key }}"
+    value: "{{ item.value }}"
+  loop:
+    - { key: "show-clock", value: "false" }
+    - { key: "show-info-panel", value: "false" }
+    - { key: "floating-widgets", value: "false" }
+    - { key: "allow-media-control", value: "false" }
+    - { key: "show-album-art", value: "false" }
+    - { key: "user-switch-enabled", value: "false" }
+    - { key: "show-notifications", value: "false" }
+    - { key: "status-message-enabled", value: "false" }
+
+- name: Patch cinnamon-screensaver for blurred wallpaper and light shade
+  become: true
+  shell: |
+    python3 << 'PYEOF'
+    path = '/usr/share/cinnamon-screensaver/monitorView.py'
+    with open(path) as f:
+        content = f.read()
+
+    if '_blur_gtk_image' in content:
+        print('ALREADY_PATCHED')
+        exit(0)
+
+    # Add GdkPixbuf import
+    content = content.replace(
+        'from gi.repository import Gtk, Gio, GLib, GObject',
+        'from gi.repository import Gtk, Gio, GLib, GObject, GdkPixbuf'
+    )
+
+    # Add blur method before transition_to_image
+    blur_method = (
+        '    def _blur_gtk_image(self, image, factor=20):\n'
+        '        """Apply blur by scaling down then back up."""\n'
+        '        pixbuf = image.get_pixbuf()\n'
+        '        if pixbuf is None:\n'
+        '            return\n'
+        '        w = pixbuf.get_width()\n'
+        '        h = pixbuf.get_height()\n'
+        '        small = pixbuf.scale_simple(\n'
+        '            max(1, w // factor), max(1, h // factor),\n'
+        '            GdkPixbuf.InterpType.BILINEAR\n'
+        '        )\n'
+        '        if small:\n'
+        '            blurred = small.scale_simple(w, h, GdkPixbuf.InterpType.BILINEAR)\n'
+        '            if blurred:\n'
+        '                image.set_from_pixbuf(blurred)\n'
+        '\n'
+    )
+    content = content.replace(
+        '    def transition_to_image(self, image):',
+        blur_method + '    def transition_to_image(self, image):'
+    )
+
+    # Call blur in transition_to_image
+    content = content.replace(
+        '        self.queued = image\n        self.queued.set_visible(True)',
+        '        self.queued = image\n        self._blur_gtk_image(self.queued)\n        self.queued.set_visible(True)'
+    )
+
+    # Replace heavy shade with light uniform overlay
+    old_shade = '''    def shade_wallpaper(self, widget, cr):
+        """
+        This draw callback adds a shade mask over the current
+        image.  It is uniform when not Awake, and acquires a
+        significant gradient vertically framing the unlock dialog
+        when Awake.
+        """
+        if not status.Awake:
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.7)
+            cr.paint()
+            return False
+
+        r = widget.get_allocation()
+
+        pattern = cairo.LinearGradient(0, 0, 0, r.height)
+        pattern.add_color_stop_rgba (0, 0, 0, 0, .75)
+        pattern.add_color_stop_rgba (.35, 0, 0, 0, .9)
+        pattern.add_color_stop_rgba (.65, 0, 0, 0, .9)
+        pattern.add_color_stop_rgba (1, 0, 0, 0, .75)
+        cr.set_source(pattern)
+        cr.paint()
+
+        return False'''
+
+    new_shade = '''    def shade_wallpaper(self, widget, cr):
+        """Light uniform shade over blurred wallpaper."""
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.15)
+        cr.paint()
+        return False'''
+
+    content = content.replace(old_shade, new_shade)
+
+    with open(path, 'w') as f:
+        f.write(content)
+
+    # Clear Python cache so changes take effect
+    import shutil, os
+    cache = os.path.join(os.path.dirname(path), '__pycache__')
+    if os.path.isdir(cache):
+        shutil.rmtree(cache)
+
+    print('PATCHED')
+    PYEOF
+  args:
+    executable: /bin/bash
+  register: lockscreen_patch
+  changed_when: "'PATCHED' in lockscreen_patch.stdout"
+
+- name: Add lock screen CSS overrides to hide face, name, and buttons
+  blockinfile:
+    path: "{{ ansible_env.HOME }}/.config/gtk-3.0/gtk.css"
+    create: true
+    mode: '0644'
+    marker: "/* {mark} LOCKSCREEN OVERRIDES */"
+    block: |
+      .csstage .faceimage {
+        opacity: 0;
+        min-width: 0;
+        min-height: 0;
+        padding: 0;
+        margin: 0;
+        border: none;
+      }
+      .csstage .unlockbox > label {
+        opacity: 0;
+        min-height: 0;
+        padding: 0;
+        margin: 0;
+        font-size: 0;
+      }
+      .csstage .transparentbutton {
+        opacity: 0;
+        min-width: 0;
+        min-height: 0;
+        padding: 0;
+        margin: 0;
+      }
+      .csstage .passwordentry {
+        background-color: rgba(0, 0, 0, 0.35);
+        border-color: rgba(255, 255, 255, 0.15);
+        border-radius: 4px;
+        min-width: 280px;
+      }
+      .csstage .passwordentry:focus {
+        background-color: rgba(0, 0, 0, 0.45);
+        border-color: rgba(255, 255, 255, 0.25);
+      }
