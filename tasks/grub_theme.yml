@@ -45,6 +45,27 @@
   # Let's just use it as is.
   notify: update grub
 
+- name: Ensure Plymouth is purged (to avoid splash screens)
+  become: true
+  apt:
+    name: [plymouth, plymouth-themes]
+    state: absent
+    purge: true
+
+- name: Remove GRUB background cache file
+  become: true
+  file:
+    path: /boot/grub/.background_cache.png
+    state: absent
+
+- name: Disable quiet and splash boot in /etc/default/grub
+  become: true
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+    line: 'GRUB_CMDLINE_LINUX_DEFAULT="noplymouth"'
+  notify: update grub
+
 - name: Configure /etc/default/grub for minimal theme
   become: true
   lineinfile:
