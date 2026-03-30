@@ -28,3 +28,7 @@
 - name: rebuild console font
   become: true
   command: dpkg-reconfigure -f noninteractive console-setup
+
+- name: apply keyboard config
+  become: true
+  command: dpkg-reconfigure -f noninteractive keyboard-configuration

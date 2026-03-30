@@ -13,24 +13,18 @@
     # This prevents it from re-running if the config directory already exists
     creates: "{{ ansible_env.HOME }}/.config/ohmydebn"
 
-- name: Core Keyboard Remap (Caps to Escape) - Cinnamon dconf
-  become: false
-  dconf:
-    key: "{{ item }}"
-    value: "['caps:escape']"
-  loop:
-    - "/org/cinnamon/desktop/input-sources/xkb-options"
-    - "/org/cinnamon/desktop/input/keyboard/xkb-options"
+- name: Core Keyboard Remap (Caps to Escape)
+  become: true
+  lineinfile:
+    path: /etc/default/keyboard
+    regexp: '^XKBOPTIONS='
+    line: 'XKBOPTIONS="caps:escape"'
+  notify: apply keyboard config
 
-- name: Core Keyboard Remap (Caps to Escape) - setxkbmap autostart fallback
-  copy:
-    dest: "{{ ansible_env.HOME }}/.config/autostart/caps-to-escape.desktop"
-    content: |
-      [Desktop Entry]
-      Type=Application
-      Exec=setxkbmap -option caps:escape
-      Name=Caps Lock to Escape
-      X-GNOME-Autostart-enabled=true
+- name: Remove stale caps-to-escape autostart fallback
+  file:
+    path: "{{ ansible_env.HOME }}/.config/autostart/caps-to-escape.desktop"
+    state: absent
 
 - name: Persist and Restore Brightness Across Reboots
   block:
