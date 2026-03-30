@@ -202,3 +202,110 @@
     regexp: '^auth\s+required\s+pam_succeed_if.so'
     line: 'auth    required    pam_succeed_if.so user ingroup autologin'
     state: present
+
+# ---------------------------------------------------------------------------
+# Browser Camera Fix (xdg-desktop-portal + PipeWire)
+# ---------------------------------------------------------------------------
+# Chromium-based browsers access cameras via xdg-desktop-portal, which
+# silently hangs or auto-denies on Cinnamon because no backend handles
+# the Camera permission dialog. Fix: route Access through GTK,
+# pre-authorize camera access in the permission store, and bind the
+# portal to PipeWire so it reconnects after suspend/resume.
+
+- name: Configure xdg-desktop-portal for Cinnamon camera support
+  block:
+    - name: Ensure xdg-desktop-portal config directory exists
+      file:
+        path: "{{ ansible_env.HOME }}/.config/xdg-desktop-portal"
+        state: directory
+        mode: '0755'
+
+    - name: Write portal backend routing config
+      copy:
+        dest: "{{ ansible_env.HOME }}/.config/xdg-desktop-portal/portals.conf"
+        content: |
+          [preferred]
+          default=xapp;gtk
+          org.freedesktop.impl.portal.Secret=gnome-keyring
+          org.freedesktop.impl.portal.Access=gtk
+      register: portals_conf
+
+    - name: Ensure xdg-desktop-portal systemd override directory exists
+      file:
+        path: "{{ ansible_env.HOME }}/.config/systemd/user/xdg-desktop-portal.service.d"
+        state: directory
+        mode: '0755'
+
+    - name: Bind xdg-desktop-portal to PipeWire (reconnect after suspend/resume)
+      copy:
+        dest: "{{ ansible_env.HOME }}/.config/systemd/user/xdg-desktop-portal.service.d/after-pipewire.conf"
+        content: |
+          [Unit]
+          After=pipewire.service
+          BindsTo=pipewire.service
+      register: portal_override
+
+    - name: Reload systemd user daemon
+      systemd:
+        daemon_reload: true
+        scope: user
+      when: portal_override.changed
+
+    - name: Restart PipeWire stack first (portal depends on it)
+      systemd:
+        name: "{{ item }}"
+        scope: user
+        state: restarted
+      loop:
+        - pipewire
+        - wireplumber
+        - pipewire-pulse
+      when: portals_conf.changed or portal_override.changed
+
+    - name: Wait for PipeWire to be ready
+      pause:
+        seconds: 2
+      when: portals_conf.changed or portal_override.changed
+
+    - name: Restart xdg-desktop-portal services
+      systemd:
+        name: "{{ item }}"
+        scope: user
+        state: restarted
+      loop:
+        - xdg-desktop-portal
+        - xdg-desktop-portal-gtk
+        - xdg-desktop-portal-xapp
+      when: portals_conf.changed or portal_override.changed
+      ignore_errors: yes
+
+    - name: Grant camera permission in the portal permission store
+      command: >
+        gdbus call --session
+        --dest org.freedesktop.impl.portal.PermissionStore
+        --object-path /org/freedesktop/impl/portal/PermissionStore
+        --method org.freedesktop.impl.portal.PermissionStore.SetPermission
+        "devices" true "camera" "" "['yes']"
+      changed_when: false
+
+    - name: MANUAL STEP REQUIRED — Enable PipeWire camera flag in Brave
+      debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════════╗
+          ║                    ⚠️  MANUAL STEP REQUIRED                     ║
+          ╠══════════════════════════════════════════════════════════════════╣
+          ║                                                                ║
+          ║  Brave cannot access your camera until you enable this flag:   ║
+          ║                                                                ║
+          ║    brave://flags/#enable-webrtc-pipewire-camera                ║
+          ║                                                                ║
+          ║  1. Open Brave                                                 ║
+          ║  2. Paste the URL above into the address bar                   ║
+          ║  3. Set the flag to "Enabled"                                  ║
+          ║  4. Relaunch Brave when prompted                               ║
+          ║                                                                ║
+          ║  This only needs to be done once. The setting persists.        ║
+          ║                                                                ║
+          ╚══════════════════════════════════════════════════════════════════╝
+  become: false
+
