@@ -1,0 +1,44 @@
+---
+- name: Check if VS Code is already installed
+  command: dpkg -s code
+  register: vscode_installed
+  ignore_errors: true
+  changed_when: false
+
+- name: Install VS Code (Github Copilot AI) via OhMyDebn method
+  become: true
+  when: vscode_installed.rc != 0
+  block:
+    - name: Determine Architecture
+      set_fact:
+        vscode_arch: "{{ 'x64' if ansible_architecture == 'x86_64' else 'arm64' if ansible_architecture == 'aarch64' else '' }}"
+
+    - name: Fail if unsupported architecture
+      fail:
+        msg: "x86_64 and aarch64 are the only supported architectures! (Detected: {{ ansible_architecture }})"
+      when: vscode_arch == ""
+
+    - name: Download VS Code .deb from official source
+      get_url:
+        url: "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-{{ vscode_arch }}"
+        dest: "/tmp/vscode.deb"
+        mode: '0644'
+
+    - name: Install VS Code .deb
+      apt:
+        deb: "/tmp/vscode.deb"
+        state: present
+
+    - name: Clean up temporary .deb
+      file:
+        path: "/tmp/vscode.deb"
+        state: absent
+
+- name: Install VS Code AI Extensions
+  shell: "code --install-extension {{ item }} --force"
+  loop:
+    - GitHub.copilot
+    - GitHub.copilot-chat
+  register: ext_install
+  changed_when: "'was successfully installed' in ext_install.stdout"
+  failed_when: false

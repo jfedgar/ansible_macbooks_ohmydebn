@@ -9,6 +9,8 @@
       include_tasks: tasks/core.yml
     - name: Development Environment Setup
       include_tasks: tasks/dev_setup.yml
+    - name: VS Code (Github Copilot AI)
+      include_tasks: tasks/vscode.yml
     - name: Desktop Quality of Life (Stable)
       include_tasks: tasks/quality_of_life.yml
     - name: Panel Appearance
