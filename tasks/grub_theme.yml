@@ -1,0 +1,70 @@
+---
+# ---------------------------------------------------------------------------
+# GRUB Theme — minimal-grub-theme (like Omarchy)
+# ---------------------------------------------------------------------------
+
+- name: Set GRUB theme variables
+  set_fact:
+    grub_font_size: 30
+    grub_timeout: 5
+
+- name: Ensure dependencies for GRUB theme are installed
+  become: true
+  apt:
+    name: [git, grub-common]
+    state: present
+
+- name: Clone minimal-grub-theme repository
+  git:
+    repo: https://github.com/aspy606/minimal-grub-theme.git
+    dest: "{{ playbook_dir }}/tmp/minimal-grub-theme"
+    depth: 1
+
+- name: Ensure GRUB themes directory exists
+  become: true
+  file:
+    path: /boot/grub/themes/minimal
+    state: directory
+    mode: '0755'
+
+- name: Copy theme files to /boot/grub/themes/minimal
+  become: true
+  copy:
+    src: "{{ playbook_dir }}/tmp/minimal-grub-theme/minimal/"
+    dest: /boot/grub/themes/minimal/
+    remote_src: true
+    mode: '0644'
+
+- name: Generate custom GRUB font
+  become: true
+  command:
+    cmd: "grub-mkfont -s {{ grub_font_size }} -o /boot/grub/themes/minimal/custom.pf2 /boot/grub/themes/minimal/original.ttf"
+  # We remove 'creates' to allow updating if font size changes, but we could also use a checksum or something.
+  # For now, let's just use it without creates so it's idempotent in effect (overwrites same file).
+  # Actually, it's better to use 'creates' but maybe include the font size in the filename if we want it strictly idempotent?
+  # Let's just use it as is.
+  notify: update grub
+
+- name: Configure /etc/default/grub for minimal theme
+  become: true
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_THEME='
+    line: 'GRUB_THEME="/boot/grub/themes/minimal/theme.txt"'
+  notify: update grub
+
+- name: Set GRUB timeout
+  become: true
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_TIMEOUT='
+    line: "GRUB_TIMEOUT={{ grub_timeout }}"
+  notify: update grub
+
+- name: Ensure GRUB timeout style is menu
+  become: true
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_TIMEOUT_STYLE='
+    line: 'GRUB_TIMEOUT_STYLE=menu'
+  notify: update grub
