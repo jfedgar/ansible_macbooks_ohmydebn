@@ -1,0 +1,38 @@
+#!/bin/bash
+# Run the ohmydebn screensaver using random effects from TTE.
+# Adapted from Omarchy (https://omarchy.com)
+
+EFFECTS=(
+  beams binarypath blackhole bouncyballs bubbles burn colorshift
+  crumble decrypt errorcorrect expand fireworks highlight laseretch
+  matrix middleout orbittingvolley overflow pour print rain
+  randomsequence rings scattered slice slide spotlights spray
+  swarm sweep synthgrid unstable vhstape waves wipe
+)
+
+exit_screensaver() {
+  pkill -x tte 2>/dev/null
+  exit 0
+}
+
+trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
+
+printf '\033]11;rgb:00/00/00\007'
+
+tty=$(tty 2>/dev/null)
+
+while true; do
+  effect=${EFFECTS[$((RANDOM % ${#EFFECTS[@]}))]}
+  tte -i ~/.config/ohmydebn/branding/screensaver.txt \
+    --frame-rate 120 --canvas-width 0 --canvas-height 0 \
+    --anchor-canvas c --anchor-text c \
+    "$effect" &
+
+  while pgrep -t "${tty#/dev/}" -x tte >/dev/null; do
+    if read -n1 -t 1; then
+      exit_screensaver
+    fi
+  done
+
+  sleep 1
+done
