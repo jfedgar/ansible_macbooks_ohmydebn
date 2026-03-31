@@ -2,9 +2,16 @@
 - name: Install Fundamental Binaries
   become: true
   apt:
-    name: [curl, git, wget, gpg, brightnessctl, x11-utils]
+    name: [curl, git, wget, gpg, brightnessctl, x11-utils, tealdeer]
     state: present
     update_cache: yes
+
+- name: Update tldr cache
+  command: tldr --update
+  register: tldr_update
+  changed_when: "'Successfully updated' in tldr_update.stdout"
+  # Run as user, not root, to populate user's cache
+  become: false
 
 - name: Install ohmydebn (The Official Curl Method)
   shell: |
