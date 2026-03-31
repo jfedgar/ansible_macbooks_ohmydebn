@@ -32,3 +32,7 @@
 - name: apply keyboard config
   become: true
   command: dpkg-reconfigure -f noninteractive keyboard-configuration
+
+- name: update initramfs
+  become: true
+  command: update-initramfs -u

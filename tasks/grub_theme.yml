@@ -45,12 +45,156 @@
   # Let's just use it as is.
   notify: update grub
 
-- name: Ensure Plymouth is purged (to avoid splash screens)
+- name: Ensure Plymouth and themes are installed
   become: true
   apt:
     name: [plymouth, plymouth-themes]
-    state: absent
-    purge: true
+    state: present
+
+# ---------------------------------------------------------------------------
+# Minimal Plymouth theme — black background, password box only, no logos
+# Plymouth is required for touchbar boot timing (tiny-dfr After=plymouth-quit)
+# but we only want it for the LUKS decrypt prompt, not boot/shutdown animation
+# ---------------------------------------------------------------------------
+
+- name: Ensure custom Plymouth theme directory exists
+  become: true
+  file:
+    path: /usr/share/plymouth/themes/minimal-dark
+    state: directory
+    mode: '0755'
+
+- name: Install minimal-dark Plymouth descriptor
+  become: true
+  copy:
+    dest: /usr/share/plymouth/themes/minimal-dark/minimal-dark.plymouth
+    mode: '0644'
+    content: |
+      [Plymouth Theme]
+      Name=Minimal Dark
+      Description=Black background with password entry only — no logos or animations
+      ModuleName=script
+
+      [script]
+      ImageDir=/usr/share/plymouth/themes/minimal-dark
+      ScriptFile=/usr/share/plymouth/themes/minimal-dark/minimal-dark.script
+
+- name: Copy password field assets from moonlight theme
+  become: true
+  copy:
+    src: "/usr/share/plymouth/themes/moonlight/{{ item }}"
+    dest: "/usr/share/plymouth/themes/minimal-dark/{{ item }}"
+    remote_src: true
+    mode: '0644'
+  loop:
+    - password_field.png
+    - password_dot.png
+
+- name: Install minimal-dark Plymouth script
+  become: true
+  copy:
+    dest: /usr/share/plymouth/themes/minimal-dark/minimal-dark.script
+    mode: '0644'
+    content: |
+      # minimal-dark — password entry only, no logos, no animation
+      # Plymouth is kept for LUKS decrypt prompt and touchbar boot timing
+
+      Window.SetBackgroundTopColor(0, 0, 0);
+      Window.SetBackgroundBottomColor(0, 0, 0);
+
+      # ---- Text rendering ----
+      fun WriteText(text, colour) {
+          image = Image.Text(text, colour.red, colour.green, colour.blue, 1, "Sans 14");
+          return image;
+      }
+
+      prompt_colour.red = 0.8;
+      prompt_colour.green = 0.8;
+      prompt_colour.blue = 0.8;
+
+      # ---- Password dialogue ----
+      fun password_dialogue_setup(message_label) {
+          local.entry;
+          local.bullet_image;
+
+          bullet_image = Image("password_dot.png");
+          entry.image = Image("password_field.png");
+
+          entry.sprite = Sprite(entry.image);
+          entry.x = Window.GetX() + Window.GetWidth() / 2 - entry.image.GetWidth() / 2;
+          entry.y = Window.GetY() + Window.GetHeight() / 2 - entry.image.GetHeight() / 2;
+          entry.z = 10000;
+          entry.sprite.SetPosition(entry.x, entry.y, entry.z);
+
+          global.password_dialogue = local;
+      }
+
+      fun display_password_callback(prompt, bullets) {
+          global.status = "password";
+          if (!global.password_dialogue) password_dialogue_setup(prompt);
+
+          bullet_width = password_dialogue.bullet_image.GetWidth();
+          bullet_y = password_dialogue.entry.y +
+                     password_dialogue.entry.image.GetHeight() / 2 -
+                     password_dialogue.bullet_image.GetHeight() / 2;
+          margin = bullet_width;
+          spaces = Math.Int((password_dialogue.entry.image.GetWidth() - margin * 2) / (bullet_width / 2));
+
+          if (bullets > spaces)
+              bullets = spaces;
+
+          bullets_area_width = margin + spaces * (bullet_width / 2);
+          bullets_area_x = Window.GetX() + Window.GetWidth() / 2 - bullets_area_width / 2;
+
+          for (index = 0; password_dialogue.bullets[index] || index < bullets; index++) {
+              if (!password_dialogue.bullets[index]) {
+                  password_dialogue.bullets[index].sprite = Sprite();
+                  password_dialogue.bullets[index].sprite.SetImage(password_dialogue.bullet_image);
+                  password_dialogue.bullets[index].sprite.SetPosition(
+                      bullets_area_x + index * bullet_width / 2,
+                      bullet_y,
+                      password_dialogue.entry.z + 1
+                  );
+              }
+              password_dialogue.bullets[index].sprite.SetOpacity(0);
+              if (index < bullets)
+                  password_dialogue.bullets[index].sprite.SetOpacity(1);
+          }
+      }
+
+      Plymouth.SetDisplayPasswordFunction(display_password_callback);
+
+      # ---- No-op callbacks (no boot animation, no messages) ----
+      fun display_normal_callback(msg) { }
+      fun display_end_callback() { }
+      fun refresh_callback() { }
+
+      Plymouth.SetDisplayNormalFunction(display_normal_callback);
+      Plymouth.SetBootProgressFunction(refresh_callback);
+
+  notify: update initramfs
+
+- name: Set Plymouth theme to minimal-dark
+  become: true
+  command: plymouth-set-default-theme minimal-dark
+  register: plymouth_theme
+  changed_when: true
+  notify: update initramfs
+
+# ---------------------------------------------------------------------------
+# Disable Plymouth on shutdown/reboot (just show text status as before)
+# ---------------------------------------------------------------------------
+
+- name: Mask Plymouth shutdown services
+  become: true
+  systemd:
+    name: "{{ item }}"
+    masked: true
+  loop:
+    - plymouth-poweroff.service
+    - plymouth-reboot.service
+    - plymouth-halt.service
+    - plymouth-kexec.service
 
 - name: Remove GRUB background cache file
   become: true
@@ -58,12 +202,20 @@
     path: /boot/grub/.background_cache.png
     state: absent
 
-- name: Disable quiet and splash boot in /etc/default/grub
+- name: Set GRUB kernel boot params (splash for LUKS prompt, no quiet for boot text)
   become: true
   lineinfile:
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
-    line: 'GRUB_CMDLINE_LINUX_DEFAULT="noplymouth"'
+    line: 'GRUB_CMDLINE_LINUX_DEFAULT="splash"'
+  notify: update grub
+
+- name: Keep GRUB framebuffer mode into kernel (reduces flash between GRUB and Plymouth)
+  become: true
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^#?GRUB_GFXPAYLOAD_LINUX='
+    line: 'GRUB_GFXPAYLOAD_LINUX=keep'
   notify: update grub
 
 - name: Configure /etc/default/grub for minimal theme
