@@ -48,6 +48,12 @@
     line: 'Debian = "󱔼"'
     state: present
 
+- name: Disable username in Starship prompt
+  lineinfile:
+    path: "{{ ansible_env.HOME }}/.config/starship.toml"
+    regexp: '^show_always'
+    line: 'show_always = false'
+
 # ---------------------------------------------------------------------------
 # Minimal Lockscreen (Omarchy Style)
 # ---------------------------------------------------------------------------
