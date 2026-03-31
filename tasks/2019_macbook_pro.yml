@@ -1,0 +1,24 @@
+---
+# =============================================================================
+# 2019 16" MacBook Pro (MacBookPro16,1 / 16,4) — T2 Fixes (debian13)
+# =============================================================================
+
+- name: Confirm 2019 16" MacBook Pro
+  debug:
+    msg: "Running 2019 16-inch MacBook Pro tasks ({{ ansible_product_name }})"
+
+- name: Force Early KMS for dual graphics in initramfs (required for lightdm to work)
+  become: true
+  lineinfile:
+    path: /etc/initramfs-tools/modules
+    line: "{{ item }}"
+    state: present
+  loop:
+    - amdgpu
+    - i915
+  register: initramfs_modules
+
+- name: Update initramfs
+  become: true
+  command: update-initramfs -u
+  when: initramfs_modules.changed

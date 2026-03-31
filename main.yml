@@ -7,6 +7,12 @@
   tasks:
     - name: Core System Foundation
       include_tasks: tasks/core.yml
+    - name: 2019 MacBook Pro
+      include_tasks: tasks/2019_macbook_pro.yml
+      when: ansible_product_name in ["MacBookPro16,1", "MacBookPro16,4"]
+    - name: 2018 MacBook Pro
+      include_tasks: tasks/2018_macbook_pro.yml
+      when: ansible_product_name == "MacBookPro15,1"
     - name: Development Environment Setup
       include_tasks: tasks/dev_setup.yml
     - name: VS Code (Github Copilot AI)
@@ -19,7 +25,4 @@
       include_tasks: tasks/screensaver.yml
     - name: GRUB Theme
       include_tasks: tasks/grub_theme.yml
-    - name: 2018 MacBook Pro
-      include_tasks: tasks/2018_macbook_pro.yml
-      when: ansible_product_name == "MacBookPro15,1"
 
