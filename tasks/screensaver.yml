@@ -6,10 +6,13 @@
 # Modified for ohmydebn (Cinnamon/X11) — replaced hyprctl with xdotool/xprop,
 # adapted tte flags for v0.12.0, and uses inline alacritty config
 #
-# Architecture: cinnamon-screensaver stays running for lid-close/suspend/manual
-# lock. Its idle activation is disabled. xss-lock handles idle detection and
-# launches the TTE screensaver. On dismiss, lock is triggered via
-# cinnamon-screensaver-command if lock-delay has elapsed.
+# Architecture: A Python daemon polls xprintidle and launches a fullscreen
+# Alacritty/TTE screensaver at idle-delay. csd-power will also activate
+# cinnamon-screensaver at the same time — the daemon actively suppresses
+# this via cinnamon-screensaver-command -d so TTE stays visible.
+# Security relies on lock-on-suspend: the user sets suspend timeout = desired
+# screensaver duration. When suspend fires, cinnamon locks automatically.
+# Manual lock (Ctrl+Alt+L) still works — the daemon doesn't interfere.
 # ---------------------------------------------------------------------------
 
 - name: Ensure screensaver dependencies are installed
@@ -17,8 +20,16 @@
   apt:
     name:
       - python3-terminaltexteffects
-      - xss-lock
+      - python3-dbus
+      - python3-gi
+      - xprintidle
     state: present
+
+- name: Remove legacy screensaver components
+  become: true
+  apt:
+    name: xss-lock
+    state: absent
 
 - name: Install screensaver branding text
   copy:
@@ -32,88 +43,39 @@
     dest: "{{ ansible_env.HOME }}/.local/bin/ohmydebn-cmd-screensaver"
     mode: "0755"
 
-- name: Install screensaver launch script
+- name: Install screensaver orchestration daemon
   copy:
-    dest: "{{ ansible_env.HOME }}/.local/bin/ohmydebn-launch-screensaver"
+    src: "{{ playbook_dir }}/files/ohmydebn-screensaver-daemon.py"
+    dest: "{{ ansible_env.HOME }}/.local/bin/ohmydebn-screensaver-daemon"
     mode: "0755"
-    content: |
-      #!/bin/bash
-      # Launch the ohmydebn screensaver in fullscreen alacritty, lock on dismiss.
-      # Adapted from Omarchy (https://omarchy.com)
-      # Reads lock-delay and lock-enabled from Cinnamon's screensaver settings.
 
-      if ! command -v tte &>/dev/null; then
-        exit 1
-      fi
-
-      # Exit early if screensaver is already running
-      pgrep -f ohmydebn.screensaver && exit 0
-
-      # Read lock settings from Cinnamon GUI config
-      LOCK_ENABLED=$(gsettings get org.cinnamon.desktop.screensaver lock-enabled 2>/dev/null)
-      LOCK_DELAY=$(gsettings get org.cinnamon.desktop.screensaver lock-delay 2>/dev/null | awk '{print $NF}')
-      LOCK_DELAY=${LOCK_DELAY:-30}
-
-      START_TIME=$(date +%s)
-
-      # Launch screensaver (blocks until dismissed)
-      alacritty --class=ohmydebn.screensaver \
-        -o 'window.startup_mode="Fullscreen"' \
-        -o 'window.decorations="None"' \
-        -o font.size=18 \
-        -o 'colors.primary.background="#000000"' \
-        -o 'colors.primary.foreground="#ffffff"' \
-        -e ohmydebn-cmd-screensaver
-
-      # Lock screen if enabled and lock-delay has elapsed
-      if [ "$LOCK_ENABLED" = "true" ]; then
-        ELAPSED=$(( $(date +%s) - START_TIME ))
-        if [ "$ELAPSED" -ge "$LOCK_DELAY" ]; then
-          cinnamon-screensaver-command -l
-        fi
-      fi
+- name: Remove outdated launch script
+  file:
+    path: "{{ ansible_env.HOME }}/.local/bin/ohmydebn-launch-screensaver"
+    state: absent
 
 # ---------------------------------------------------------------------------
-# Idle activation — cinnamon-screensaver keeps running for lid-close, suspend,
-# and manual lock. Only its idle activation is disabled to avoid conflict.
-# xss-lock + xset handle idle → TTE screensaver instead.
-# Idle timeout is read from Cinnamon's GUI setting (takes effect after re-login).
+# Idle activation — cinnamon-screensaver stays alive for manual lock, lid-close,
+# and lock-on-suspend. idle-activation-enabled is set to false as a signal of
+# intent, though csd-power ignores it (the daemon handles suppression instead).
+# custom-screensaver-command MUST stay empty — setting it kills the entire
+# cinnamon-screensaver daemon (no D-Bus, no locking, no lock-on-suspend).
 # ---------------------------------------------------------------------------
 
-- name: Disable Cinnamon screensaver idle activation (xss-lock handles idle)
+- name: Disable Cinnamon screensaver idle activation
   dconf:
     key: "/org/cinnamon/desktop/screensaver/idle-activation-enabled"
     value: "false"
 
-- name: Ensure custom-screensaver-command is unset (keep cinnamon-screensaver daemon alive)
+- name: Ensure custom-screensaver-command is unset (setting it kills cinnamon-screensaver entirely)
   dconf:
     key: "/org/cinnamon/desktop/screensaver/custom-screensaver-command"
     value: "''"
 
-- name: Install screensaver idle daemon
-  copy:
-    dest: "{{ ansible_env.HOME }}/.local/bin/ohmydebn-screensaver-daemon"
-    mode: "0755"
-    content: |
-      #!/bin/bash
-      # Read idle timeout from Cinnamon's GUI setting and start xss-lock.
-      # Cinnamon-screensaver stays running for lid-close/suspend/manual lock,
-      # but its idle activation is disabled. We handle idle via xss-lock instead.
-
-      IDLE_SECONDS=$(gsettings get org.cinnamon.desktop.session idle-delay 2>/dev/null | awk '{print $NF}')
-      IDLE_SECONDS=${IDLE_SECONDS:-300}
-
-      # Cinnamon resets xset during startup — wait until it stops doing so
-      while true; do
-        xset s "$IDLE_SECONDS" 0
-        sleep 5
-        CURRENT=$(xset q 2>/dev/null | grep "timeout:" | awk '{print $2}')
-        if [ "$CURRENT" = "$IDLE_SECONDS" ]; then
-          break
-        fi
-      done
-
-      exec xss-lock -- "$HOME/.local/bin/ohmydebn-launch-screensaver"
+- name: Ensure lock-on-suspend is enabled (security relies on this)
+  dconf:
+    key: "/org/cinnamon/settings-daemon/plugins/power/lock-on-suspend"
+    value: "true"
 
 - name: Install screensaver idle autostart
   copy:
@@ -126,4 +88,4 @@
       Exec={{ ansible_env.HOME }}/.local/bin/ohmydebn-screensaver-daemon
       Hidden=false
       X-GNOME-Autostart-enabled=true
-      Comment=TTE screensaver with idle detection (reads timeout from Cinnamon settings)
+      Comment=TTE screensaver daemon — suppresses cinnamon-screensaver during TTE playback
