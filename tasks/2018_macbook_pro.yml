@@ -362,10 +362,11 @@
         post)
           # Reload apple-bce
           modprobe apple-bce
-          sleep 2
+          sleep 3
 
           # Reload wifi
           echo 1 > /sys/bus/pci/rescan
+          sleep 1
           modprobe brcmfmac
           modprobe brcmfmac_wcc 2>/dev/null
           sleep 2
